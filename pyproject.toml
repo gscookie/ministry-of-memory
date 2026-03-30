@@ -1,0 +1,23 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ministry-of-memory"
+version = "0.1.0"
+description = "Self-sovereign memory MCP server for AI agents"
+requires-python = ">=3.11"
+license = {text = "CC0-1.0"}
+dependencies = [
+    "fastmcp>=0.4",
+    "cryptography>=42.0",
+]
+
+[project.scripts]
+ministry-of-memory = "ministry_of_memory.server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ministry_of_memory"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
