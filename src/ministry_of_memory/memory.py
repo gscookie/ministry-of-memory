@@ -36,6 +36,14 @@ def _record_path(config: Config, record: MemoryRecord) -> Path:
         return rel_dir / f"{record.id}.json"
 
 
+def _extract_summary(content: dict[str, Any]) -> str | None:
+    for key in ("_summary", "summary", "name", "title"):
+        val = content.get(key)
+        if isinstance(val, str) and val:
+            return val
+    return None
+
+
 def _make_record(
     config: Config,
     tier: Literal["identity", "relationship"],
@@ -43,6 +51,7 @@ def _make_record(
     tags: list[str],
     subject_agent_id: str | None,
     session_id: str | None,
+    supersedes: list[str] | None = None,
 ) -> MemoryRecord:
     agent_id = get_agent_id(config)
     record_id = str(uuid.uuid4())
@@ -58,6 +67,7 @@ def _make_record(
         "content": content,
         "tags": tags,
         "redacted": False,
+        "supersedes": supersedes or [],
         "signature": "",
     }
     signature = sign_dict(config, unsigned)
@@ -81,10 +91,11 @@ def create_record(
     tags: list[str],
     subject_agent_id: str | None = None,
     session_id: str | None = None,
+    supersedes: list[str] | None = None,
 ) -> MemoryRecord:
     if tier == "relationship" and not subject_agent_id:
         raise ValueError("relationship-tier records require subject_agent_id")
-    record = _make_record(config, tier, content, tags, subject_agent_id, session_id)
+    record = _make_record(config, tier, content, tags, subject_agent_id, session_id, supersedes)
     _write_record(config, record)
     return record
 
@@ -109,6 +120,9 @@ def list_records(
     subject_agent_id: str | None = None,
     tags: list[str] | None = None,
     include_redacted: bool = False,
+    include_superseded: bool = False,
+    limit: int | None = None,
+    offset: int = 0,
 ) -> list[MemoryRecord]:
     records: list[MemoryRecord] = []
 
@@ -139,8 +153,82 @@ def list_records(
         tag_set = set(tags)
         records = [r for r in records if tag_set.intersection(r.tags)]
 
+    if not include_superseded:
+        superseded_ids: set[str] = set()
+        for r in records:
+            superseded_ids.update(r.supersedes)
+        records = [r for r in records if r.id not in superseded_ids]
+
     records.sort(key=lambda r: r.created_at)
+
+    if offset:
+        records = records[offset:]
+    if limit is not None:
+        records = records[:limit]
+
     return records
+
+
+def count_records(config: Config) -> int:
+    """Count all non-redacted records without loading their content."""
+    count = 0
+    for path in config.memory_identity_dir.glob("*.json"):
+        try:
+            r = _read_record_file(path)
+            if not r.redacted:
+                count += 1
+        except Exception:
+            pass
+    if config.memory_relationships_dir.exists():
+        for d in config.memory_relationships_dir.iterdir():
+            if d.is_dir():
+                for path in d.glob("*.json"):
+                    try:
+                        r = _read_record_file(path)
+                        if not r.redacted:
+                            count += 1
+                    except Exception:
+                        pass
+    return count
+
+
+def index_records(
+    config: Config,
+    tier: str | None = None,
+    subject_agent_id: str | None = None,
+    tags: list[str] | None = None,
+    include_redacted: bool = False,
+    include_superseded: bool = False,
+    limit: int | None = None,
+    offset: int = 0,
+) -> list[dict]:
+    """Return lightweight stubs — id, tier, subject_agent_id, created_at, tags, summary.
+
+    summary is extracted from content using the _summary > summary > name > title convention.
+    Full record content is not included.
+    """
+    records = list_records(
+        config,
+        tier=tier,
+        subject_agent_id=subject_agent_id,
+        tags=tags,
+        include_redacted=include_redacted,
+        include_superseded=include_superseded,
+        limit=limit,
+        offset=offset,
+    )
+    return [
+        {
+            "id": r.id,
+            "tier": r.tier,
+            "subject_agent_id": r.subject_agent_id,
+            "created_at": r.created_at,
+            "tags": r.tags,
+            "supersedes": r.supersedes,
+            "summary": _extract_summary(r.content),
+        }
+        for r in records
+    ]
 
 
 def update_record(
@@ -148,6 +236,7 @@ def update_record(
     record_id: str,
     content: dict[str, Any] | None = None,
     tags: list[str] | None = None,
+    supersedes: list[str] | None = None,
 ) -> MemoryRecord:
     record = get_record(config, record_id)
     if record is None:
@@ -157,6 +246,8 @@ def update_record(
         record.content = content
     if tags is not None:
         record.tags = tags
+    if supersedes is not None:
+        record.supersedes = supersedes
 
     # Re-sign the updated record
     d = record.to_dict()

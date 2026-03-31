@@ -16,6 +16,7 @@ class MemoryRecord:
     tags: list[str]
     redacted: bool
     signature: str
+    supersedes: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -28,6 +29,7 @@ class MemoryRecord:
             "content": self.content,
             "tags": self.tags,
             "redacted": self.redacted,
+            "supersedes": self.supersedes,
             "signature": self.signature,
         }
 
@@ -43,6 +45,7 @@ class MemoryRecord:
             content=d["content"],
             tags=d["tags"],
             redacted=d.get("redacted", False),
+            supersedes=d.get("supersedes", []),
             signature=d["signature"],
         )
 

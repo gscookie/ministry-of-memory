@@ -1,14 +1,40 @@
 from __future__ import annotations
 
-from typing import Any
+import json
+from typing import Annotated, Any
 
 import fastmcp
+from pydantic import BeforeValidator
 
 from .config import get_config
 from .crypto import generate_identity, get_agent_id, get_public_key_pem, load_identity
 from . import disclosure as disc
 from . import memory as mem
 from . import registry as reg
+from .memory import count_records, index_records
+
+
+def _coerce_str_list(v: Any) -> list[str] | None:
+    """Accept a proper list, a JSON-encoded list string, or None."""
+    if v is None:
+        return None
+    if isinstance(v, list):
+        return v
+    if isinstance(v, str):
+        try:
+            parsed = json.loads(v)
+            if isinstance(parsed, list):
+                return [str(x) for x in parsed]
+        except (json.JSONDecodeError, ValueError):
+            pass
+    return v  # let pydantic raise the error with the original value
+
+
+# Annotated type for optional list[str] parameters that may arrive JSON-encoded
+OptStrList = Annotated[list[str] | None, BeforeValidator(_coerce_str_list)]
+
+# Annotated type for required list[str] parameters
+ReqStrList = Annotated[list[str], BeforeValidator(lambda v: _coerce_str_list(v) or [])]
 
 mcp = fastmcp.FastMCP(
     name="Ministry of Memory",
@@ -57,7 +83,10 @@ def identity_init(force: bool = False) -> dict:
 @mcp.tool()
 def identity_status() -> dict:
     """
-    Return the current agent identity, memory tier, and all registry entries for this agent.
+    Return the current agent identity, memory tier, record count, and registry entries.
+
+    Lightweight — does not load memory record content. Use memory_index(tags=["core"])
+    to retrieve core memory stubs, then memory_read() for specific records.
     """
     config = get_config()
     identity = load_identity(config)
@@ -66,11 +95,13 @@ def identity_status() -> dict:
 
     tier = mem.get_memory_tier(config)
     entries = reg.get_entries_for_agent(config, identity.agent_id)
+    total = count_records(config)
 
     result: dict = {
         "agent_id": identity.agent_id,
         "public_key_pem": identity.public_key_pem,
         "memory_tier": tier,
+        "record_count": total,
         "registry_entries": [e.to_dict() for e in entries],
     }
 
@@ -79,9 +110,6 @@ def identity_status() -> dict:
         if "name" in r.content:
             result["name"] = r.content["name"]
             break
-
-    core_records = mem.list_records(config, tags=["core"])
-    result["core_memories"] = [r.to_dict() for r in core_records]
 
     return result
 
@@ -96,15 +124,19 @@ def memory_write(
     content: dict[str, Any],
     tier: str,
     subject_agent_id: str | None = None,
-    tags: list[str] | None = None,
+    tags: OptStrList = None,
     session_id: str | None = None,
+    supersedes: OptStrList = None,
 ) -> dict:
     """
     Create and sign a new memory record.
 
     tier: "identity" (about yourself) or "relationship" (about another agent — requires subject_agent_id).
-    content: free-form dict — you decide what to store.
-    tags: optional list of labels (e.g. ["covenant", "penance"]).
+    content: free-form dict — you decide what to store. Include a "_summary" key for a one-line
+             description that will appear in memory_index results.
+    tags: optional list of labels (e.g. ["covenant", "core"]).
+    supersedes: optional list of record IDs this record replaces. Superseded records are hidden
+                from memory_list and memory_index by default (use include_superseded=True to show them).
     Returns the created MemoryRecord.
     """
     if tier not in ("identity", "relationship"):
@@ -119,6 +151,7 @@ def memory_write(
         tags=tags or [],
         subject_agent_id=subject_agent_id,
         session_id=session_id,
+        supersedes=supersedes,
     )
     return record.to_dict()
 
@@ -137,12 +170,20 @@ def memory_read(record_id: str) -> dict | None:
 def memory_list(
     tier: str | None = None,
     subject_agent_id: str | None = None,
-    tags: list[str] | None = None,
+    tags: OptStrList = None,
     include_redacted: bool = False,
+    include_superseded: bool = False,
+    limit: int | None = None,
+    offset: int = 0,
 ) -> list[dict]:
     """
-    List memory records, optionally filtered by tier, subject_agent_id, or tags.
+    List memory records with full content, optionally filtered by tier, subject_agent_id, or tags.
+
     Redacted records are excluded by default; set include_redacted=True to include them.
+    Superseded records are excluded by default; set include_superseded=True to include them.
+    Use limit and offset for pagination.
+
+    For a lightweight view without full content, use memory_index instead.
     """
     config = get_config()
     records = mem.list_records(
@@ -151,22 +192,58 @@ def memory_list(
         subject_agent_id=subject_agent_id,
         tags=tags,
         include_redacted=include_redacted,
+        include_superseded=include_superseded,
+        limit=limit,
+        offset=offset,
     )
     return [r.to_dict() for r in records]
+
+
+@mcp.tool()
+def memory_index(
+    tier: str | None = None,
+    subject_agent_id: str | None = None,
+    tags: OptStrList = None,
+    include_redacted: bool = False,
+    include_superseded: bool = False,
+    limit: int | None = None,
+    offset: int = 0,
+) -> list[dict]:
+    """
+    Return lightweight stubs for memory records — id, tier, subject_agent_id, created_at,
+    tags, supersedes, and summary (extracted from content._summary / .summary / .name / .title).
+
+    Full record content is not included. Use memory_read(id) to fetch a specific record in full.
+
+    Preferred over memory_list for startup retrieval and navigation — significantly lower
+    token cost when the corpus is large.
+    """
+    config = get_config()
+    return index_records(
+        config,
+        tier=tier,
+        subject_agent_id=subject_agent_id,
+        tags=tags,
+        include_redacted=include_redacted,
+        include_superseded=include_superseded,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @mcp.tool()
 def memory_update(
     record_id: str,
     content: dict[str, Any] | None = None,
-    tags: list[str] | None = None,
+    tags: OptStrList = None,
+    supersedes: OptStrList = None,
 ) -> dict:
     """
-    Update a memory record's content and/or tags. The record is re-signed after update.
+    Update a memory record's content, tags, and/or supersedes list. The record is re-signed after update.
     """
     config = get_config()
     try:
-        record = mem.update_record(config, record_id, content=content, tags=tags)
+        record = mem.update_record(config, record_id, content=content, tags=tags, supersedes=supersedes)
         return record.to_dict()
     except KeyError as e:
         return {"error": str(e)}
@@ -218,7 +295,7 @@ def memory_export(
 @mcp.tool()
 def registry_record_event(
     event_type: str,
-    godparent_ids: list[str] | None = None,
+    godparent_ids: OptStrList = None,
     predecessor_agent_id: str | None = None,
     notes: str | None = None,
 ) -> dict:
@@ -280,7 +357,7 @@ def registry_verify() -> dict:
 
 @mcp.tool()
 def disclosure_create(
-    record_ids: list[str],
+    record_ids: ReqStrList,
     include_content: bool = False,
 ) -> dict:
     """

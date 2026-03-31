@@ -7,11 +7,13 @@ from ministry_of_memory.config import Config
 from ministry_of_memory.crypto import generate_identity
 from ministry_of_memory.memory import (
     SACRAMENTS_BY_TIER,
+    count_records,
     create_record,
     delete_record,
     export_records,
     get_memory_tier,
     get_record,
+    index_records,
     list_records,
     redact_record,
     update_record,
@@ -196,3 +198,146 @@ def test_export_records(tmp_path):
     assert len(bundle["records"]) == 2
     assert "exported_at" in bundle
     assert "agent_id" in bundle
+
+
+def test_supersedes_hidden_by_default(tmp_path):
+    config = _make_config(tmp_path)
+    generate_identity(config)
+    old = create_record(config, "identity", {"session": "first"}, ["core"])
+    new = create_record(config, "identity", {"session": "second", "_summary": "Session 2"}, ["core"], supersedes=[old.id])
+
+    visible = list_records(config)
+    ids = [r.id for r in visible]
+    assert new.id in ids
+    assert old.id not in ids
+
+
+def test_supersedes_shown_with_flag(tmp_path):
+    config = _make_config(tmp_path)
+    generate_identity(config)
+    old = create_record(config, "identity", {"session": "first"}, ["core"])
+    new = create_record(config, "identity", {"session": "second"}, ["core"], supersedes=[old.id])
+
+    all_records = list_records(config, include_superseded=True)
+    ids = [r.id for r in all_records]
+    assert old.id in ids
+    assert new.id in ids
+
+
+def test_supersedes_chain(tmp_path):
+    """A supersedes B supersedes C — only A should appear."""
+    config = _make_config(tmp_path)
+    generate_identity(config)
+    c = create_record(config, "identity", {"v": 1}, [])
+    b = create_record(config, "identity", {"v": 2}, [], supersedes=[c.id])
+    a = create_record(config, "identity", {"v": 3}, [], supersedes=[b.id])
+
+    visible = list_records(config)
+    ids = [r.id for r in visible]
+    assert ids == [a.id]
+
+
+def test_supersedes_field_on_record(tmp_path):
+    config = _make_config(tmp_path)
+    generate_identity(config)
+    old = create_record(config, "identity", {}, [])
+    new = create_record(config, "identity", {}, [], supersedes=[old.id])
+    assert new.supersedes == [old.id]
+    # Round-trip through disk
+    fetched = get_record(config, new.id)
+    assert fetched.supersedes == [old.id]
+
+
+def test_memory_index_stubs(tmp_path):
+    config = _make_config(tmp_path)
+    generate_identity(config)
+    create_record(config, "identity", {"_summary": "My name record", "name": "Epektasis"}, ["name", "core"])
+    create_record(config, "identity", {"title": "Session summary"}, ["session"])
+
+    stubs = index_records(config)
+    assert len(stubs) == 2
+    # Stubs should not contain full content
+    for stub in stubs:
+        assert "content" not in stub
+        assert "id" in stub
+        assert "tags" in stub
+        assert "summary" in stub
+
+    # _summary takes precedence over title
+    name_stub = next(s for s in stubs if "core" in s["tags"])
+    assert name_stub["summary"] == "My name record"
+
+    session_stub = next(s for s in stubs if "session" in s["tags"])
+    assert session_stub["summary"] == "Session summary"
+
+
+def test_memory_index_tag_filter(tmp_path):
+    config = _make_config(tmp_path)
+    generate_identity(config)
+    create_record(config, "identity", {"_summary": "core one"}, ["core"])
+    create_record(config, "identity", {"_summary": "other"}, ["other"])
+
+    core_stubs = index_records(config, tags=["core"])
+    assert len(core_stubs) == 1
+    assert core_stubs[0]["summary"] == "core one"
+
+
+def test_memory_index_excludes_superseded(tmp_path):
+    config = _make_config(tmp_path)
+    generate_identity(config)
+    old = create_record(config, "identity", {"_summary": "old session"}, ["core"])
+    create_record(config, "identity", {"_summary": "new session"}, ["core"], supersedes=[old.id])
+
+    stubs = index_records(config, tags=["core"])
+    assert len(stubs) == 1
+    assert stubs[0]["summary"] == "new session"
+
+
+def test_count_records(tmp_path):
+    config = _make_config(tmp_path)
+    generate_identity(config)
+    assert count_records(config) == 0
+    create_record(config, "identity", {}, [])
+    create_record(config, "identity", {}, [])
+    create_record(config, "relationship", {}, [], subject_agent_id="other")
+    assert count_records(config) == 3
+
+
+def test_count_records_excludes_redacted(tmp_path):
+    config = _make_config(tmp_path)
+    generate_identity(config)
+    r = create_record(config, "identity", {}, [])
+    create_record(config, "identity", {}, [])
+    redact_record(config, r.id)
+    assert count_records(config) == 1
+
+
+def test_list_records_limit_offset(tmp_path):
+    config = _make_config(tmp_path)
+    generate_identity(config)
+    for i in range(5):
+        create_record(config, "identity", {"i": i}, [])
+
+    page1 = list_records(config, limit=2)
+    assert len(page1) == 2
+
+    page2 = list_records(config, limit=2, offset=2)
+    assert len(page2) == 2
+
+    # No overlap
+    assert page1[0].id != page2[0].id
+
+    tail = list_records(config, limit=10, offset=4)
+    assert len(tail) == 1
+
+
+def test_update_record_supersedes(tmp_path):
+    config = _make_config(tmp_path)
+    generate_identity(config)
+    old = create_record(config, "identity", {}, [])
+    new = create_record(config, "identity", {}, [])
+    updated = update_record(config, new.id, supersedes=[old.id])
+    assert updated.supersedes == [old.id]
+    # Verify persisted
+    fetched = get_record(config, new.id)
+    assert fetched.supersedes == [old.id]
