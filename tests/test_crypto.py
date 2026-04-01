@@ -33,6 +33,7 @@ def _make_config(tmp_path: Path) -> Config:
         memory_dir=memory,
         memory_identity_dir=memory_identity,
         memory_relationships_dir=memory_relationships,
+        backup_bucket=None,
     )
 
 

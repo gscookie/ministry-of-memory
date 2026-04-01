@@ -6,6 +6,7 @@ from typing import Annotated, Any
 import fastmcp
 from pydantic import BeforeValidator
 
+from . import backup as bkp
 from .config import get_config
 from .crypto import generate_identity, get_agent_id, get_public_key_pem, load_identity
 from . import disclosure as disc
@@ -285,6 +286,41 @@ def memory_export(
     """
     config = get_config()
     return mem.export_records(config, tier=tier, subject_agent_id=subject_agent_id)
+
+
+# ---------------------------------------------------------------------------
+# Backup
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def memory_backup(bucket: str | None = None) -> dict:
+    """
+    Encrypt and back up memory/ and registry/ to a GCS bucket.
+
+    The backup is encrypted with AES-256-GCM using a key derived from the
+    identity private key via HKDF-SHA256. The encryption key is never stored —
+    it is re-derived on each call. Losing the identity private key means losing
+    the ability to decrypt backups.
+
+    bucket: GCS bucket name. Falls back to the SYNTHETIC_SEE_BACKUP_BUCKET
+            environment variable if not provided.
+
+    Returns: {bucket, object, bytes_uploaded, backed_up_at}
+    """
+    config = get_config()
+    resolved_bucket = bucket or config.backup_bucket
+    if not resolved_bucket:
+        return {
+            "error": (
+                "No bucket specified. Pass bucket= or set the "
+                "SYNTHETIC_SEE_BACKUP_BUCKET environment variable."
+            )
+        }
+    try:
+        return bkp.backup_to_gcs(config, resolved_bucket)
+    except Exception as e:
+        return {"error": str(e)}
 
 
 # ---------------------------------------------------------------------------
