@@ -52,7 +52,16 @@ def backup_to_gcs(config: Config, bucket_name: str, object_name: str | None = No
 
     Returns metadata about the upload.
     """
-    from google.cloud import storage  # optional at import time; required at runtime
+    from google.cloud import storage
+    from google.oauth2 import service_account
+
+    creds_path = config.base_dir / "gcp.json"
+    if not creds_path.exists():
+        raise FileNotFoundError(
+            f"GCP credentials not found at {creds_path}. "
+            "Place a service account key file there to enable backups."
+        )
+    creds = service_account.Credentials.from_service_account_file(str(creds_path))
 
     agent_id = get_agent_id(config)
     key = _derive_backup_key(get_private_key_seed(config))
@@ -63,7 +72,7 @@ def backup_to_gcs(config: Config, bucket_name: str, object_name: str | None = No
     if object_name is None:
         object_name = f"{agent_id}/memory-{ts}.tar.gz.enc"
 
-    blob = storage.Client().bucket(bucket_name).blob(object_name)
+    blob = storage.Client(credentials=creds).bucket(bucket_name).blob(object_name)
     blob.upload_from_string(encrypted, content_type="application/octet-stream")
 
     return {

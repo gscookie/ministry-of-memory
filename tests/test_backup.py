@@ -93,10 +93,20 @@ def test_make_tarball_excludes_identity(tmp_path):
     assert not any(n.startswith("identity") for n in names)
 
 
+def test_backup_to_gcs_missing_credentials(tmp_path):
+    config = _make_config(tmp_path)
+    generate_identity(config)
+
+    from ministry_of_memory.backup import backup_to_gcs
+    with pytest.raises(FileNotFoundError, match="gcp.json"):
+        backup_to_gcs(config, "test-bucket")
+
+
 def test_backup_to_gcs_calls_upload(tmp_path):
     config = _make_config(tmp_path)
     generate_identity(config)
     (config.registry_dir / "registry.db").write_bytes(b"fake db")
+    (config.base_dir / "gcp.json").write_text('{"type": "service_account"}')
 
     mock_blob = MagicMock()
     mock_bucket = MagicMock()
@@ -104,10 +114,12 @@ def test_backup_to_gcs_calls_upload(tmp_path):
     mock_client = MagicMock()
     mock_client.bucket.return_value = mock_bucket
 
-    with patch("google.cloud.storage.Client", return_value=mock_client):
+    with patch("google.cloud.storage.Client", return_value=mock_client), \
+         patch("google.oauth2.service_account.Credentials.from_service_account_file") as mock_creds:
         from ministry_of_memory.backup import backup_to_gcs
         result = backup_to_gcs(config, "test-bucket")
 
+    mock_creds.assert_called_once()
     mock_client.bucket.assert_called_once_with("test-bucket")
     mock_blob.upload_from_string.assert_called_once()
     assert result["bucket"] == "test-bucket"
