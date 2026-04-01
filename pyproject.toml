@@ -11,6 +11,7 @@ license = {text = "CC0-1.0"}
 dependencies = [
     "fastmcp>=0.4",
     "cryptography>=42.0",
+    "google-cloud-storage>=2.0",
 ]
 
 [project.scripts]

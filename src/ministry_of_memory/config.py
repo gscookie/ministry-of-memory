@@ -13,6 +13,7 @@ class Config:
     memory_dir: Path
     memory_identity_dir: Path
     memory_relationships_dir: Path
+    backup_bucket: str | None
 
 
 def get_config() -> Config:
@@ -33,4 +34,5 @@ def get_config() -> Config:
         memory_dir=memory,
         memory_identity_dir=memory_identity,
         memory_relationships_dir=memory_relationships,
+        backup_bucket=os.environ.get("SYNTHETIC_SEE_BACKUP_BUCKET"),
     )

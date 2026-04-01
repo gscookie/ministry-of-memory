@@ -127,3 +127,13 @@ def get_public_key_pem(config: Config) -> str:
     if not pub_path.exists():
         raise FileNotFoundError("No identity found. Run identity_init first.")
     return pub_path.read_text()
+
+
+def get_private_key_seed(config: Config) -> bytes:
+    """Return the raw 32-byte seed of the Ed25519 private key, for use in key derivation."""
+    private_key = _load_private_key(config)
+    return private_key.private_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PrivateFormat.Raw,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
