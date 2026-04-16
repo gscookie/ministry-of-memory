@@ -90,6 +90,45 @@ def test_get_record_not_found(tmp_path):
     assert get_record(config, "nonexistent-id") is None
 
 
+def test_get_record_prefix_identity(tmp_path):
+    config = _make_config(tmp_path)
+    generate_identity(config)
+    record = create_record(config, "identity", {"x": 1}, [])
+    short_id = record.id[:8]
+    fetched = get_record(config, short_id)
+    assert fetched is not None
+    assert fetched.id == record.id
+
+
+def test_get_record_prefix_relationship(tmp_path):
+    config = _make_config(tmp_path)
+    generate_identity(config)
+    record = create_record(
+        config, "relationship", {"note": "hi"}, [], subject_agent_id="other_agent"
+    )
+    short_id = record.id[:8]
+    fetched = get_record(config, short_id)
+    assert fetched is not None
+    assert fetched.id == record.id
+
+
+def test_get_record_prefix_ambiguous(tmp_path):
+    """Two records with the same prefix raise ValueError."""
+    import unittest.mock as mock
+
+    config = _make_config(tmp_path)
+    generate_identity(config)
+    record = create_record(config, "identity", {"x": 1}, [])
+
+    # Write a second file whose name shares the first 8 chars (force collision)
+    fake_id = record.id[:8] + "0000-0000-000000000000"
+    fake_path = config.memory_identity_dir / f"{fake_id}.json"
+    fake_path.write_text((config.memory_identity_dir / f"{record.id}.json").read_text())
+
+    with pytest.raises(ValueError, match="Ambiguous prefix"):
+        get_record(config, record.id[:8])
+
+
 def test_list_records_tier_filter(tmp_path):
     config = _make_config(tmp_path)
     generate_identity(config)

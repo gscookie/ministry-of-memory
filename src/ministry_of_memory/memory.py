@@ -101,16 +101,29 @@ def create_record(
 
 
 def get_record(config: Config, record_id: str) -> MemoryRecord | None:
-    # Search identity dir
+    # Exact match — identity dir
     path = config.memory_identity_dir / f"{record_id}.json"
     if path.exists():
         return _read_record_file(path)
-    # Search all relationship subdirs
+    # Exact match — relationship subdirs
     for subdir in config.memory_relationships_dir.iterdir():
         if subdir.is_dir():
             path = subdir / f"{record_id}.json"
             if path.exists():
                 return _read_record_file(path)
+
+    # Prefix match — collect all candidates
+    candidates: list[Path] = []
+    candidates.extend(config.memory_identity_dir.glob(f"{record_id}*.json"))
+    for subdir in config.memory_relationships_dir.iterdir():
+        if subdir.is_dir():
+            candidates.extend(subdir.glob(f"{record_id}*.json"))
+
+    if len(candidates) == 1:
+        return _read_record_file(candidates[0])
+    if len(candidates) > 1:
+        ids = ", ".join(p.stem for p in candidates)
+        raise ValueError(f"Ambiguous prefix '{record_id}' matches: {ids}")
     return None
 
 

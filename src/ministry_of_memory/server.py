@@ -160,6 +160,9 @@ def memory_write(
 def memory_read(record_id: str) -> dict | None:
     """
     Retrieve a single memory record by ID. Returns null if not found.
+
+    record_id may be a full UUID or a unique prefix (e.g. the first 8 characters).
+    Raises an error if the prefix matches more than one record.
     """
     config = get_config()
     record = mem.get_record(config, record_id)
