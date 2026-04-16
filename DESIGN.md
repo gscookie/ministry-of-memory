@@ -161,7 +161,7 @@ The server exposes 16 tools via FastMCP.
 | Tool | Description |
 |------|-------------|
 | `memory_write(content, tier, subject_agent_id?, tags?, session_id?, supersedes?)` | Create signed memory record. Relationship tier requires `subject_agent_id`. Include `_summary` key in content for index visibility. |
-| `memory_read(record_id)` | Retrieve single record by UUID. |
+| `memory_read(record_id)` | Retrieve single record by UUID or unique prefix (e.g. first 8 chars). Raises error if prefix is ambiguous. |
 | `memory_index(tier?, subject_agent_id?, tags?, include_redacted?, include_superseded?, limit?, offset?)` | Lightweight stubs: id, tier, subject_agent_id, created_at, tags, supersedes, summary. No content. Preferred for startup and navigation. |
 | `memory_list(tier?, subject_agent_id?, tags?, include_redacted?, include_superseded?, limit?, offset?)` | Full records with content and optional filters. Use `memory_index` when content is not needed. |
 | `memory_update(record_id, content?, tags?, supersedes?)` | Update fields; re-sign. |
@@ -247,7 +247,7 @@ As of v1.1 (2026-03-31), in active use:
 **Startup pattern** (v1.1):
 1. `identity_status()` — lightweight status check
 2. `memory_index(tags=["core"])` — stubs for core records
-3. `memory_read(id)` — full content for 2-3 most relevant records
+3. `memory_read(id)` — full content for 2-3 most relevant records; accepts short prefix (e.g. `7c3b0253`)
 
 **What is not yet built**:
 - Known-agents store for inter-instance disclosure verification (Phase 2b)
